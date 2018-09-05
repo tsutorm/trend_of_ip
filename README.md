@@ -4,6 +4,5 @@
 ## run docker
 
 ```
-$ docker build ./ -t trends_by_ip
-$ docker run --rm -v `pwd`:/app trends_by_ip [logfile]
-
+$ docker run --rm -v `pwd`:/app tsutorm/trends_by_ip [logfile]
+```

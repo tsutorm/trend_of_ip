@@ -30,13 +30,15 @@ def from_aws(ip):
 
 def _scraped_off_part_not_i_need(origin_log):
     # *.gz と分ける
-    cat_cmd = "gzcat" if os.path.splitext(origin_log)[1] == ".gz" else "cat"
+    cat_cmd = "cat"
+    decompress = " | gunzip " if os.path.splitext(origin_log)[1] == ".gz" else ""
     no_bot_no_assets = '| grep "GET /.*/ HTTP" | grep -v -i "bot"'
     i_need_column = '| cut -d " " -f 1,4,14-' #IP, 日時, User-Agentだけ
     tmp_path = tempfile.mkstemp(prefix='eachip', suffix='.log')[1]
-    cmd = '{0} {1} {2} {3} > {4}'.format(
+    cmd = '{0} {1} {2} {3} {4} > {5}'.format(
         cat_cmd,
         os.path.abspath(origin_log),
+        decompress,
         no_bot_no_assets,
         i_need_column,
         tmp_path)
