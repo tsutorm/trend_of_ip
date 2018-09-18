@@ -13,4 +13,4 @@ RUN mkdir /app
 WORKDIR /app
 ADD . /app
 
-ENTRYPOINT ["python", "trends_by_ip.py"]
+ENTRYPOINT ["python", "trend_of_ip.py"]

@@ -1,8 +1,8 @@
-# trends_by_ip
+# trend_of_ip
 
 
 ## run docker
 
 ```
-$ docker run --rm -v `pwd`:/app tsutorm/trends_by_ip [logfile]
+$ docker run --rm -v `pwd`:/app tsutorm/trend_of_ip [logfile]
 ```
