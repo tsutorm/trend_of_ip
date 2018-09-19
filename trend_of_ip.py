@@ -18,15 +18,25 @@ def load_aws_networks():
         sys.exit(1)
     if r.status_code != 200:
         return []
-    return [ipaddress.ip_network(item.get('ip_prefix')) for item in r.json().get('prefixes')]
+    networks = (ipaddress.ip_network(item.get('ip_prefix')) for item in r.json().get('prefixes'))
+    net_bin = {}
+    for network in networks:
+        first_octet, _, _, _ = tuple(str(network).split('.'))
+        if not first_octet in net_bin:
+            net_bin[first_octet] = []
+        net_bin[first_octet].append(network)
+    return net_bin
 
 AWS_NETWORKS = load_aws_networks()
 
 def from_aws(ip):
-    is_aws = False
-    for nw in AWS_NETWORKS:
-        is_aws = is_aws or (ipaddress.ip_address(ip) in nw)
-    return is_aws
+    test_address = ipaddress.ip_address(ip)
+    first_octet, _, _, _ = tuple(ip.split('.'))
+    if not first_octet in AWS_NETWORKS:
+        return False
+    for nw in AWS_NETWORKS[first_octet]:
+        if (test_address in nw): return True
+    return False
 
 def _scraped_off_part_not_i_need(origin_log):
     from_file = ""
