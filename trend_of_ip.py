@@ -29,27 +29,33 @@ def from_aws(ip):
     return is_aws
 
 def _scraped_off_part_not_i_need(origin_log):
-    # *.gz と分ける
-    cat_cmd = "cat"
-    decompress = " | gunzip " if os.path.splitext(origin_log)[1] == ".gz" else ""
-    no_bot_no_assets = '| grep "GET /.*/ HTTP" | grep -v -i "bot"'
-    i_need_column = '| cut -d " " -f 1,4,14-' #IP, 日時, User-Agentだけ
+    from_file = ""
+    if sys.stdin.isatty():
+        decompress = " | gunzip " if os.path.splitext(origin_log)[1] == ".gz" else ""
+        from_file = 'cat {0} {1} |'.format(
+            os.path.abspath(origin_log),
+            decompress)
+    
+    no_bot_no_assets = 'grep "GET /.*/ HTTP" | grep -v -i "bot"'
+    i_need_column = 'cut -d " " -f 1,4,14-' #IP, 日時, User-Agentだけ
     tmp_path = tempfile.mkstemp(prefix='eachip', suffix='.log')[1]
-    cmd = '{0} {1} {2} {3} {4} > {5}'.format(
-        cat_cmd,
-        os.path.abspath(origin_log),
-        decompress,
+    cmd = '{0} {1} | {2} > {3}'.format(
+        from_file,
         no_bot_no_assets,
         i_need_column,
         tmp_path)
-    print (cmd)
-    subprocess.call(cmd, shell=True)
+    # print (cmd)
+    if sys.stdin.isatty():
+        subprocess.run(cmd, shell=True)
+    else:
+        subprocess.run(cmd, stdin=sys.stdin, shell=True)
+    
     return tmp_path
 
 def open_log():
-    if len(sys.argv) < 2:
-        return []
-    _, fname = tuple(sys.argv)
+    fname = None
+    if 1 < len(sys.argv) and sys.stdin.isatty():
+        _, fname = tuple(sys.argv)
     return open(_scraped_off_part_not_i_need(fname))
 
 def timedeltas_each_ip(stream):
