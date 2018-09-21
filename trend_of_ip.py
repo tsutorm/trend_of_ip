@@ -5,6 +5,7 @@ import tempfile
 from datetime import datetime
 import subprocess
 import statistics
+import numpy as np
 
 import ipaddress
 import requests
@@ -82,20 +83,40 @@ def timedeltas_each_ip(stream):
     return sorted([(ip, [end - begin for begin, end in zip(times[:-1], times[1:])])
                 for ip, times in hits_each_ips.items()], key=lambda x: int(len(x[1])))
 
+def _stats_delta_seconds(delta_seconds):
+    np_delta_seconds = np.array(delta_seconds)
+    return (np.amin(np_delta_seconds), np.amax(np_delta_seconds),
+            np.average(np_delta_seconds),
+            np.mean(np_delta_seconds),
+            len(delta_seconds))
+
+def _count_per_timebox(delta_seconds, timebox = 1):
+    same_count, time_count = (0, 0)
+    count_per_timebox = []
+    for proc_time in delta_seconds:
+        time_count += proc_time
+        if timebox < time_count:
+            count_per_timebox.append(same_count)
+            same_count = 0
+            time_count = proc_time
+        else:
+            same_count += 1
+    count_per_timebox.append(same_count)
+    return count_per_timebox
+
 def list_of_ips(timedeltas_each_ip):
-    print (" {:^14} | {:^5} | {:^5} | {:^5} | {:^8} | {:^8} | {:^5} |".format('ipaddr', 'count', 'min', 'max', 'avg', 'mid', 'AWS?'))
-    print ("-----------------------------------------------------------------------")
+    print (" {:^14} | {:^5} | {:^5} | {:^5} | {:^5} | {:^8} | {:^8} | {:^5} |"
+               .format('ipaddr', 'count', 'acc/s', 'min', 'max', 'avg', 'mid', 'AWS?'))
+    print ("-------------------------------------------------------------------------------")
     for ip, deltas in timedeltas_each_ip:
         delta_seconds = [d.seconds for d in deltas]
-        if not delta_seconds: continue
+        if not delta_seconds:
+            continue
         aws = 'AWS' if from_aws(ip) else ''
-        yield ('{0:>15} | {5:>5} | {1:>5} | {2:>5} | {3:>8.1f} | {4:>8.1f} | {6:^5} |'.format(
-            ip,
-            min(delta_seconds), max(delta_seconds),
-            statistics.mean(delta_seconds),
-            statistics.median(delta_seconds),
-            len(delta_seconds),
-            aws))
+        count_per_timebox = _count_per_timebox(delta_seconds)
+        amin, amax, avg, mid, count = _stats_delta_seconds(delta_seconds)
+        yield ('{:>15} | {:>5} | {:>5} | {:>5} | {:>5} | {:>8.1f} | {:>8.1f} | {:^5} |'
+                   .format(ip, count, max(count_per_timebox), amin, amax, avg, mid, aws))
 
 def main():
     for out in list_of_ips(timedeltas_each_ip(open_log())):
