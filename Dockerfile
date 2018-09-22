@@ -13,20 +13,20 @@ RUN mkdir /app
 WORKDIR /app
 ADD . /app
 
-RUN cd /app && python3 -m nuitka --recurse-all trend_of_ip.py
+RUN cd /app && python3 -m compileall trend_of_ip.py
 
-FROM alpine:3.6
+FROM python:3.6-alpine
 
-RUN mkdir /app
-WORKDIR /app
-
-RUN apk update && apk upgrade
-RUN apk --update add tzdata && \
+RUN apk update && apk upgrade && apk --update add tzdata && \
     cp /usr/share/zoneinfo/Asia/Tokyo /etc/localtime && \
     echo Asia/Tokyo > /etc/timezone && \
-    rm -rf /var/cache/apk/*
+    rm -rf /var/cache/apk/* && \
+    mkdir /app
+
+WORKDIR /app
 
 COPY --from=build /usr/bin /usr/bin
+COPY --from=build /usr/local/lib /usr/local/lib
 COPY --from=build /app /app
 
-ENTRYPOINT ["./trend_of_ip.exe"]
+ENTRYPOINT ["python3", "trend_of_ip.py"]
