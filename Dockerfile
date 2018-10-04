@@ -2,12 +2,12 @@ FROM python:3.6-alpine as build
 
 ENV LANG C.UTF-8
 
-RUN apk update && apk upgrade && apk add --no-cache gzip gfortran musl-dev
+RUN apk update && apk upgrade && apk add --no-cache gzip gfortran musl-dev zlib-dev jpeg-dev
 RUN apk --update add tzdata && \
     cp /usr/share/zoneinfo/Asia/Tokyo /etc/localtime && \
     echo Asia/Tokyo > /etc/timezone && \
     rm -rf /var/cache/apk/*
-RUN pip3 install ipaddress requests numpy nuitka
+RUN pip3 install ipaddress requests numpy asciimatics nuitka
 
 RUN mkdir /app
 WORKDIR /app
