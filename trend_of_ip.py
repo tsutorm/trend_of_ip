@@ -1,9 +1,11 @@
 # -*- coding: utf-8 -*-
+
 import sys
-import os
-import tempfile
+import os, io
+import gzip
 from datetime import datetime
-import subprocess
+import re
+import time
 import statistics
 import numpy as np
 
@@ -11,6 +13,8 @@ import ipaddress
 import requests
 
 LOG_TS_FORMAT = "%d/%b/%Y:%H:%M:%S"
+REGEXP_I_AM_BOT = re.compile('bot', re.I)
+REGEXP_GET_DOC = re.compile('GET /.*/ HTTP')
 
 def load_aws_networks():
     try:
@@ -40,44 +44,48 @@ def from_aws(ip):
         if (test_address in nw): return True
     return False
 
-def _scraped_off_part_not_i_need(origin_log):
-    from_file = ""
-    if sys.stdin.isatty():
-        decompress = " | gunzip " if os.path.splitext(origin_log)[1] == ".gz" else ""
-        from_file = 'cat {0} {1} |'.format(
-            os.path.abspath(origin_log),
-            decompress)
-    
-    no_bot_no_assets = 'grep "GET /.*/ HTTP" | grep -v -i "bot"'
-    i_need_column = 'cut -d " " -f 1,4,14-' #IP, 日時, User-Agentだけ
-    tmp_path = tempfile.mkstemp(prefix='eachip', suffix='.log')[1]
-    cmd = '{0} {1} | {2} > {3}'.format(
-        from_file,
-        no_bot_no_assets,
-        i_need_column,
-        tmp_path)
-    # print (cmd)
-    if sys.stdin.isatty():
-        subprocess.run(cmd, shell=True)
-    else:
-        subprocess.run(cmd, stdin=sys.stdin, shell=True)
-    
-    return tmp_path
+def scraped_off(line):
+    if not REGEXP_GET_DOC.search(line) or REGEXP_I_AM_BOT.search(line):
+        return (None, None)
+    #IP, 日時だけ
+    ip, _, _, ts = tuple(line.split(" ")[:4])
+    ts = ts.replace("[", "")
+    return (ip, datetime.strptime(ts, LOG_TS_FORMAT))
 
-def open_log():
-    fname = None
+class FileTailer(object):
+    def __init__(self, file, delay=0.1):
+        self.file = file
+        self.delay = delay
+    def __iter__(self):
+        while True:
+            where = self.file.tell()
+            line = self.file.readline()
+            if line and line.endswith('\n'): # only emit full lines
+                yield line
+            else:                            # for a partial line, pause and back up
+                time.sleep(self.delay)       # ...not actually a recommended approach.
+                self.file.seek(where)
+
+def open_log(args):
     if 1 < len(sys.argv) and sys.stdin.isatty():
-        _, fname = tuple(sys.argv)
-    return open(_scraped_off_part_not_i_need(fname))
+        fname = args.infile
+        decompress = (os.path.splitext(fname)[1] == ".gz")
+        open_method = gzip.open if decompress else open
+        reader = open_method(os.path.abspath(fname), 'rt')
+        if args.follow_mode:
+            reader = FileTailer(reader)
+        return reader
 
-def timedeltas_each_ip(stream):
-    hits_each_ips = {}
-    for line in stream:
-        ip, ts = tuple(line.replace("[", "").split(" ")[0:2])
-        # IP毎にtsの配列化を行う
-        if ip not in hits_each_ips.keys():
-            hits_each_ips[ip] = []
-        hits_each_ips[ip].append(datetime.strptime(ts, LOG_TS_FORMAT))
+    return sys.stdin
+
+def hits_each_ips(ip, ts, hits_each_ips = {}):
+    # IP毎にtsの配列化を行う
+    if ip not in hits_each_ips.keys():
+        hits_each_ips[ip] = []
+    hits_each_ips[ip].append(ts)
+    return hits_each_ips
+
+def _timedeltas_each_ip(hits_each_ips):
     # IP毎のアクセスタイムスタンプが得られた
     # アクセスの間隔をIP毎に計算
     return sorted([(ip, [end - begin for begin, end in zip(times[:-1], times[1:])])
@@ -104,11 +112,8 @@ def _count_per_timebox(delta_seconds, timebox = 1):
     count_per_timebox.append(same_count)
     return count_per_timebox
 
-def list_of_ips(timedeltas_each_ip):
-    print (" {:^14} | {:^5} | {:^5} | {:^5} | {:^5} | {:^8} | {:^8} | {:^5} |"
-               .format('ipaddr', 'count', 'acc/s', 'min', 'max', 'avg', 'mid', 'AWS?'))
-    print ("-------------------------------------------------------------------------------")
-    for ip, deltas in timedeltas_each_ip:
+def summary(hits_each_ips, top = 30):
+    for ip, deltas in _timedeltas_each_ip(hits_each_ips)[top*-1:]:
         delta_seconds = [d.seconds for d in deltas]
         if not delta_seconds:
             continue
@@ -118,9 +123,56 @@ def list_of_ips(timedeltas_each_ip):
         yield ('{:>15} | {:>5} | {:>5} | {:>5} | {:>5} | {:>8.1f} | {:>8.1f} | {:^5} |'
                    .format(ip, count, max(count_per_timebox), amin, amax, avg, mid, aws))
 
-def main():
-    for out in list_of_ips(timedeltas_each_ip(open_log())):
-        print(out)
+def _headers():
+    return [
+        " {:^14} | {:^5} | {:^5} | {:^5} | {:^5} | {:^8} | {:^8} | {:^5} |"
+        .format('ipaddr', 'count', 'acc/s', 'min', 'max', 'avg', 'mid', 'AWS?'),
+        "-------------------------------------------------------------------------------"
+    ]
+
+def report_to_scr(screen, data, header=True, top=30):
+    if not screen: return
+    if header:
+        for idx, header in enumerate(_headers()):
+            screen.print_at(header, 0, idx)
+    for idx, out in enumerate(summary(data, top)):
+        screen.print_at(out, 0, 2+idx)
+    screen.refresh()
+
+def report(data):
+    print ("\n".join(_headers()))
+    for out in summary(data, 0):
+        print (out)
+
+from asciimatics.screen import Screen
+import argparse
+
+def is_follow_mode():
+    return False # ("-f" in sys.argv)
+
+def main(screen, args):
+    data = {}
+    try:
+        for line in open_log(args):
+            ip, ts = scraped_off(line.strip())
+            if not ip: continue
+            data = hits_each_ips(ip, ts, data)
+            report_to_scr(screen, data, True)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        if screen: screen.close()
+        report(data)
 
 if __name__ == '__main__':
-    main()
+    parser = argparse.ArgumentParser(description='Display trends by IP address from log file.')
+    parser.add_argument('infile', metavar='logfile',
+                        help='Log file to be analyzed.')
+    parser.add_argument('-f', dest='follow_mode', action='store_const',
+                        const=True, default=False,
+                        help="Follow mode: like a 'tail -f'")
+    args = parser.parse_args()
+    if args.follow_mode:
+        Screen.wrapper(main, arguments=[args])
+    else:
+        main(None, args)
