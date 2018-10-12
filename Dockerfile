@@ -1,21 +1,28 @@
-FROM python:3.6-alpine as build
+FROM nerdwaller/pyinstaller-alpine:py3 as build
 
 ENV LANG C.UTF-8
 
-RUN apk update && apk upgrade && apk add --no-cache gzip gfortran musl-dev zlib-dev jpeg-dev
+RUN apk update && apk upgrade && \
+    apk add --no-cache git gzip gfortran musl-dev gcc libc-dev zlib-dev jpeg-dev && \
+    pip3 install --upgrade pip
 RUN apk --update add tzdata && \
     cp /usr/share/zoneinfo/Asia/Tokyo /etc/localtime && \
     echo Asia/Tokyo > /etc/timezone && \
     rm -rf /var/cache/apk/*
-RUN pip3 install ipaddress requests numpy asciimatics ltsv apache-log-parser nuitka
+RUN pip3 install six packaging ipaddress requests numpy asciimatics ltsv apache-log-parser
 
 RUN mkdir /app
 WORKDIR /app
 ADD . /app
 
-RUN cd /app && python3 -m compileall trend_of_ip.py
+RUN cd /app && pyinstaller --hidden-import six \
+    --hidden-import packaging \
+    --hidden-import packaging.version \
+    --hidden-import packaging.specifiers \
+    --hidden-import packaging.requirements \
+    --clean --strip --noconfirm --onefile -n tip trend_of_ip.py
 
-FROM python:3.6-alpine
+FROM alpine:3.5
 
 RUN apk update && apk upgrade && apk --update add tzdata && \
     cp /usr/share/zoneinfo/Asia/Tokyo /etc/localtime && \
@@ -25,8 +32,6 @@ RUN apk update && apk upgrade && apk --update add tzdata && \
 
 WORKDIR /app
 
-COPY --from=build /usr/bin /usr/bin
-COPY --from=build /usr/local/lib /usr/local/lib
-COPY --from=build /app /app
+COPY --from=build /app/dist/tip /app/dist/tip
 
-ENTRYPOINT ["python3", "trend_of_ip.py"]
+ENTRYPOINT ["/app/dist/tip"]
