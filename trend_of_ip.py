@@ -12,10 +12,6 @@ import numpy as np
 import ipaddress
 import requests
 
-LOG_TS_FORMAT = "%d/%b/%Y:%H:%M:%S"
-REGEXP_I_AM_BOT = re.compile('bot', re.I)
-REGEXP_GET_DOC = re.compile('GET /.*/ HTTP')
-
 def load_aws_networks():
     try:
         r = requests.get('https://ip-ranges.amazonaws.com/ip-ranges.json')
@@ -44,14 +40,6 @@ def from_aws(ip):
         if (test_address in nw): return True
     return False
 
-def scraped_off(line):
-    if not REGEXP_GET_DOC.search(line) or REGEXP_I_AM_BOT.search(line):
-        return (None, None)
-    #IP, 日時だけ
-    ip, _, _, ts = tuple(line.split(" ")[:4])
-    ts = ts.replace("[", "")
-    return (ip, datetime.strptime(ts, LOG_TS_FORMAT))
-
 class FileTailer(object):
     def __init__(self, file, delay=0.1):
         self.file = file
@@ -65,6 +53,65 @@ class FileTailer(object):
             else:                            # for a partial line, pause and back up
                 time.sleep(self.delay)       # ...not actually a recommended approach.
                 self.file.seek(where)
+
+def isostrptime(raw_ts):
+    return datetime(
+        int(raw_ts[0:4]),
+        int(raw_ts[5:7]),
+        int(raw_ts[8:10]),
+        int(raw_ts[11:13]),
+        int(raw_ts[14:16]),
+        int(raw_ts[17:19])
+        )
+
+class CLFParser(object):
+    DEFAULT_FORMAT= '%h - %u %t  \"%v\" \"%r\" %>s %b \"%{Referer}i\" \"%{User-Agent}i\"'
+
+    def __init__(self, file, format=None):
+        import apache_log_parser
+        self.file = self.rough_filter(file)
+        if not format:
+            # self.format = '%h %l %u %t \"%r\" %>s %b \"%{Referer}i\" \"%{User-Agent}i\"'
+            self.format = CLFParser.DEFAULT_FORMAT
+        else:
+            self.format = format
+        self.parser = apache_log_parser.make_parser(self.format)
+
+    def __iter__(self):
+        for line in self.file:
+            data = self.parser(line)
+            yield (data['remote_host'], isostrptime(data['time_received_isoformat']), data['request_url'], data['request_header_user_agent'])
+
+    def rough_filter(self, itr):
+        pattern = re.compile('GET (/.*) HTTP/1')
+        for item in itr:
+            m = pattern.search(item)
+            if m:
+                url, = m.groups()
+                path, ext = os.path.splitext(url)
+                if ext or 'bot' in item.lower():
+                    continue
+            yield item
+
+class LTSVParser(object):
+    def __init__(self, file):
+        import ltsv
+        self.file = file
+        self.reader = ltsv.DictReader(self.rough_filter(self.file), ['remote_addr', 'time', 'request_uri', 'useragent'])
+
+    def __iter__(self):
+        return ((data['remote_addr'], isostrptime(data['time']), data['request_uri'], data['useragent']) for data in self.reader)
+
+    def rough_filter(self, itr):
+        pattern = re.compile('request_method:GET.+?request_uri:(/.+?)\t.+?useragent:(.+?)[\t]')
+        for item in itr:
+            m = pattern.search(item)
+            if m:
+                url, ua = m.groups()
+                path, ext = os.path.splitext(url)
+                if ext or 'bot' in ua.lower():
+                    continue
+            yield item
 
 def open_log(args):
     if 1 < len(sys.argv) and sys.stdin.isatty():
@@ -147,15 +194,17 @@ def report(data):
 from asciimatics.screen import Screen
 import argparse
 
-def is_follow_mode():
-    return False # ("-f" in sys.argv)
+def gen_parser(args):
+    if args.use_ltsv:
+        return LTSVParser(open_log(args))
+    return CLFParser(open_log(args), args.clf_format)
 
 def main(screen, args):
     data = {}
     try:
-        for line in open_log(args):
-            ip, ts = scraped_off(line.strip())
-            if not ip: continue
+        for ip, ts, url, ua in gen_parser(args):
+            if os.path.splitext(url)[1] or "bot" in ua.lower():
+                continue
             data = hits_each_ips(ip, ts, data)
             report_to_scr(screen, data, True)
     except KeyboardInterrupt:
@@ -166,11 +215,17 @@ def main(screen, args):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Display trends by IP address from log file.')
-    parser.add_argument('infile', metavar='logfile',
+    parser.add_argument('infile', metavar='logfile', nargs='?',
                         help='Log file to be analyzed.')
     parser.add_argument('-f', dest='follow_mode', action='store_const',
                         const=True, default=False,
                         help="Follow mode: like a 'tail -f'")
+    parser.add_argument('--clf', '-c', dest='clf_format', nargs='?',
+                        const=CLFParser.DEFAULT_FORMAT, default=None,
+                        help="use CLF parser")
+    parser.add_argument('--ltsv', '-l', dest='use_ltsv', action='store_const',
+                        const=True, default=False,
+                        help="use LTSV parser")
     args = parser.parse_args()
     if args.follow_mode:
         Screen.wrapper(main, arguments=[args])

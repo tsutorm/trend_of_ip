@@ -7,7 +7,7 @@ RUN apk --update add tzdata && \
     cp /usr/share/zoneinfo/Asia/Tokyo /etc/localtime && \
     echo Asia/Tokyo > /etc/timezone && \
     rm -rf /var/cache/apk/*
-RUN pip3 install ipaddress requests numpy asciimatics nuitka
+RUN pip3 install ipaddress requests numpy asciimatics ltsv apache-log-parser nuitka
 
 RUN mkdir /app
 WORKDIR /app
