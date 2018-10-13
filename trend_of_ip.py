@@ -10,7 +10,17 @@ import statistics
 import numpy as np
 
 import ipaddress
+import dns.resolver
 import requests
+
+def _gen_netbin(networks):
+    net_bin = {}
+    for network in networks:
+        first_octet, _, _, _ = tuple(str(network).split('.'))
+        if not first_octet in net_bin:
+            net_bin[first_octet] = []
+        net_bin[first_octet].append(network)
+    return net_bin
 
 def load_aws_networks():
     try:
@@ -21,24 +31,41 @@ def load_aws_networks():
     if r.status_code != 200:
         return []
     networks = (ipaddress.ip_network(item.get('ip_prefix')) for item in r.json().get('prefixes'))
-    net_bin = {}
-    for network in networks:
-        first_octet, _, _, _ = tuple(str(network).split('.'))
-        if not first_octet in net_bin:
-            net_bin[first_octet] = []
-        net_bin[first_octet].append(network)
-    return net_bin
+    return _gen_netbin(networks)
 
-AWS_NETWORKS = load_aws_networks()
+def load_gcp_network():
+    answers = dns.resolver.query('_cloud-netblocks.googleusercontent.com','TXT')
+    maindnsrecord = answers[0].to_text()
+    includes = [x for x in maindnsrecord.split() if x.startswith("include:")]
 
-def from_aws(ip):
+    networks = []
+    for toprecord in includes:
+        subrecords = (dns.resolver.query(toprecord.split(":")[1], "TXT"))[0].to_text()
+        subrecords = subrecords.split(" ")
+        subrecords = [x for x in subrecords if x.startswith("ip")]
+        for ipblocks in subrecords:
+            if ipblocks.startswith("ip4"):
+                ip4range = ipaddress.ip_network(ipblocks[4:])
+                networks.append(ip4range)
+            if ipblocks.startswith("ip6"):
+                ip6range = ipaddress.ip_network(ipblocks[4:])
+    return _gen_netbin(networks)
+
+CLOUD_NETWORKS = {
+    'AWS': load_aws_networks(),
+    'GCP': load_gcp_network()
+    }
+
+def what_cloud_came_from(ip):
     test_address = ipaddress.ip_address(ip)
     first_octet, _, _, _ = tuple(ip.split('.'))
-    if not first_octet in AWS_NETWORKS:
-        return False
-    for nw in AWS_NETWORKS[first_octet]:
-        if (test_address in nw): return True
-    return False
+    for where, network in CLOUD_NETWORKS.items():
+        if not first_octet in network:
+            continue
+        for nw in network[first_octet]:
+            if (test_address in nw):
+                return where
+    return ''
 
 class FileTailer(object):
     def __init__(self, file, delay=0.1):
@@ -164,16 +191,16 @@ def summary(hits_each_ips, top = 30):
         delta_seconds = [d.seconds for d in deltas]
         if not delta_seconds:
             continue
-        aws = 'AWS' if from_aws(ip) else ''
+        cloud = what_cloud_came_from(ip)
         count_per_timebox = _count_per_timebox(delta_seconds)
         amin, amax, avg, mid, count = _stats_delta_seconds(delta_seconds)
         yield ('{:>15} | {:>5} | {:>5} | {:>5} | {:>5} | {:>8.1f} | {:>8.1f} | {:^5} |'
-                   .format(ip, count, max(count_per_timebox), amin, amax, avg, mid, aws))
+                   .format(ip, count, max(count_per_timebox), amin, amax, avg, mid, cloud))
 
 def _headers():
     return [
         " {:^14} | {:^5} | {:^5} | {:^5} | {:^5} | {:^8} | {:^8} | {:^5} |"
-        .format('ipaddr', 'count', 'acc/s', 'min', 'max', 'avg', 'mid', 'AWS?'),
+        .format('ipaddr', 'count', 'acc/s', 'min', 'max', 'avg', 'mid', 'cloud'),
         "-------------------------------------------------------------------------------"
     ]
 
