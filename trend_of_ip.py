@@ -8,6 +8,7 @@ import re
 import time
 import statistics
 import numpy as np
+import scipy.stats as stats
 
 import ipaddress
 import dns.resolver
@@ -165,11 +166,35 @@ def _timedeltas_each_ip(hits_each_ips):
     return sorted([(ip, [end - begin for begin, end in zip(times[:-1], times[1:])])
                 for ip, times in hits_each_ips.items()], key=lambda x: int(len(x[1])))
 
+# see: http://blog.graviness.com/?eid=949269
+def smirnov_grubbs(data, alpha):
+    x, o = list(data), []
+    while True:
+        n = len(x)
+        if n==0:
+            return np.array(data)
+        t = stats.t.isf(q=(alpha / n) / 2, df=n - 2)
+        tau = (n - 1) * t / np.sqrt(n * (n - 2) + n * t * t)
+        i_min, i_max = np.argmin(x), np.argmax(x)
+        myu, std = np.mean(x), np.std(x, ddof=1)
+        if std is np.nan or std == 0.0:
+            break
+        i_far = i_max if np.abs(x[i_max] - myu) > np.abs(x[i_min] - myu) else i_min
+        tau_far = np.abs((x[i_far] - myu) / std)
+        if tau_far < tau: break
+        o.append(x.pop(i_far))
+    return (np.array(x), np.array(o))
+
 def _stats_delta_seconds(delta_seconds):
-    np_delta_seconds = np.array(delta_seconds)
+    if len(delta_seconds) < 3:
+        np_delta_seconds = np.array(delta_seconds)
+    else:
+        np_delta_seconds = smirnov_grubbs(delta_seconds, 0.05)[0]
     return (np.amin(np_delta_seconds), np.amax(np_delta_seconds),
             np.average(np_delta_seconds),
-            np.mean(np_delta_seconds),
+            np.std(np_delta_seconds, ddof=1),
+            stats.skew(np_delta_seconds),
+            stats.kurtosis(np_delta_seconds),
             len(delta_seconds))
 
 def _count_per_timebox(delta_seconds, timebox = 1):
@@ -188,20 +213,20 @@ def _count_per_timebox(delta_seconds, timebox = 1):
 
 def summary(hits_each_ips, top = 30):
     for ip, deltas in _timedeltas_each_ip(hits_each_ips)[top*-1:]:
-        delta_seconds = [d.seconds for d in deltas]
+        delta_seconds = [d.seconds for d in deltas if 0 < d.seconds]
         if not delta_seconds:
             continue
         cloud = what_cloud_came_from(ip)
         count_per_timebox = _count_per_timebox(delta_seconds)
-        amin, amax, avg, mid, count = _stats_delta_seconds(delta_seconds)
-        yield ('{:>15} | {:>5} | {:>5} | {:>5} | {:>5} | {:>8.1f} | {:>8.1f} | {:^5} |'
-                   .format(ip, count, max(count_per_timebox), amin, amax, avg, mid, cloud))
+        amin, amax, avg, stddev, skew, kurtosis, count = _stats_delta_seconds(delta_seconds)
+        yield ('{:>15} | {:>5} | {:>5} | {:>5} | {:>5} | {:>8.1f} | {:>8.1f} | {:>5.1f} | {:>5.1f} | {:^5} |'
+                   .format(ip, len(deltas), max(count_per_timebox), amin, amax, avg, stddev, skew, kurtosis, cloud))
 
 def _headers():
     return [
-        " {:^14} | {:^5} | {:^5} | {:^5} | {:^5} | {:^8} | {:^8} | {:^5} |"
-        .format('ipaddr', 'count', 'acc/s', 'min', 'max', 'avg', 'mid', 'cloud'),
-        "-------------------------------------------------------------------------------"
+        " {:^14} | {:^5} | {:^5} | {:^5} | {:^5} | {:^8} | {:^8} | {:^5} | {:^5} | {:^5} |"
+        .format('ipaddr', 'count', 'acc/s', 'min', 'max', 'avg', 'std', 'skew', 'kurt', 'cloud'),
+        "-----------------------------------------------------------------------------------------------"
     ]
 
 def report_to_scr(screen, data, header=True, top=30):
