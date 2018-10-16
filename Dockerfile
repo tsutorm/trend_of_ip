@@ -3,7 +3,7 @@ FROM python:3.6-alpine3.7 as build
 ENV LANG C.UTF-8
 
 RUN apk update && apk upgrade && \
-    apk add --no-cache git gzip gfortran musl-dev gcc make g++ file libc-dev zlib-dev jpeg-dev lapack-dev && \
+    apk add --no-cache git gzip gfortran musl-dev gcc make g++ file libc-dev zlib-dev jpeg-dev lapack-dev python3-tkinter && \
     pip3 install --upgrade pip
 RUN apk --update add tzdata && \
     cp /usr/share/zoneinfo/Asia/Tokyo /etc/localtime && \
@@ -17,7 +17,7 @@ RUN git clone https://github.com/pyinstaller/pyinstaller.git /tmp/pyinstaller \
     && pip install .. \
     && rm -Rf /tmp/pyinstaller
 
-RUN pip3 install six packaging ipaddress requests numpy asciimatics ltsv apache-log-parser dnspython
+RUN pip3 install six pycrypto packaging ipaddress requests numpy asciimatics ltsv apache-log-parser dnspython
 RUN pip3 install scipy
 
 RUN mkdir /app
@@ -29,7 +29,8 @@ RUN cd /app && pyinstaller --hidden-import six \
     --hidden-import packaging.version \
     --hidden-import packaging.specifiers \
     --hidden-import packaging.requirements \
-    --clean --strip --noconfirm --onefile -n tip trend_of_ip.py
+    --hidden-import tkinter \
+    --strip --noconfirm --onefile --clean -n tip trend_of_ip.py
 
 FROM alpine:3.7
 
