@@ -1,7 +1,7 @@
 #
 # Build with:
-# docker build --target build -t tsutorm/trend_of_ip-build:alpine .
-# docker build -t tsutorm/trend_of_ip .
+# docker build --compress	--target build -t tsutorm/trend_of_ip-build:alpine .
+# docker build --compress	-t tsutorm/trend_of_ip .
 #
 
 FROM python:3.6-alpine3.7 as build
